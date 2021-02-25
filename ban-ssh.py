@@ -228,7 +228,7 @@ def main():
                                                              ''')
     print("Target log file set to: {}".format(FILENAME))
     print("Target database file set to: {}".format(DB_FILENAME))
-    print("Max attempts set to: {}".format(str(MAX_ATTEMPTS) + " attempt(s)" if MAX_ATTEMPTS >= 0 else 'No ban'))
+    print("Max attempts set to: {}".format(str(MAX_ATTEMPTS) + " attempt(s)" if MAX_ATTEMPTS >= 0 else 'INFINITE'))
     print("Unban limit set to: {}".format(str(UNBAN_LIMIT) + " minute(s)"  if UNBAN_LIMIT >= 0 else 'INDEFINITE'))
     print("")
 
@@ -254,7 +254,7 @@ def main():
     THREAD_FD = threading.Thread(target=thread_process, args=(comm,))
     THREAD_FD.start()
 
-    print("Starting watcher thread...")
+    print("Starting worker thread...")
     fd = subprocess.Popen(['tail','-f', '-c 0', filename], stdout=subprocess.PIPE)
 
     print("Application Running...")
