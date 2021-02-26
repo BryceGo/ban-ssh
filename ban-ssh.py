@@ -50,24 +50,43 @@ def signal_handler(sig, frame):
     print("\nApplication stopped..")
     sys.exit(0)
 
+def check_ip(ip_address):
+    command = ['iptables',
+                '-C', 'INPUT',
+                '-s', ip_address+'/32',
+                '-m', 'tcp', '-p', 'tcp',
+                '--dport', '22',
+                '-j', 'DROP',
+                '-w']
+
+    f = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output = f.returncode
+
+    if output == 0:
+        return True
+    elif output == 1:
+        return False
+    else:
+        print(output)
+        print("Error, unknown output check_ip")
+        return True
+
 def ban_ip(ip_address):
     command = ['iptables',
                 '-A', 'INPUT',
                 '-s', ip_address+'/32',
                 '-m', 'tcp', '-p', 'tcp',
                 '--dport', '22',
-                '-j', 'DROP']
+                '-j', 'DROP',
+                '-w']
 
 
-    f = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    f = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
-    output = f.stderr.readline()
-    f.terminate()
-    if output != b'':
-        print("Error: ", output)
-        return 1
+    output = f.returncode
+
     print("Banned ip address: {}".format(ip_address))
-    return 0
+    return output
 
 def unban_ip(ip_address):
     command = ['iptables',
@@ -75,15 +94,15 @@ def unban_ip(ip_address):
                 '-s', ip_address+'/32',
                 '-m', 'tcp', '-p', 'tcp',
                 '--dport', '22',
-                '-j', 'DROP']
+                '-j', 'DROP',
+                '-w']
     while True:
-        f = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        output = f.stderr.readline()
-        f.terminate()
+        f = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output = f.returncode
         
-        if (output == b''):
+        if output == 0:
             continue
-        elif (re.search('Bad rule', output.decode()) != None):
+        elif output == 1:
             #Normal operation
             break
         else:
@@ -91,8 +110,6 @@ def unban_ip(ip_address):
             print("Error: ", output)
             break
     print("Unbanned ip address: {}".format(ip_address))
-
-
 
 def read_db(filename):
     if not(os.path.exists(filename)):
@@ -133,19 +150,31 @@ def thread_process(comm):
             if DB_LIST[ip_addr][2] == "B":
                 # Check time for unban
                 ban_time = datetime.datetime.strptime(DB_LIST[ip_addr][1], DATE_FMT)
-                if (unban_time >= 0) and ((datetime.datetime.now() - ban_time) > datetime.timedelta(minutes = unban_time)):
+                bans = DB_LIST[ip_addr][3]
+                if (unban_time >= 0) and ((datetime.datetime.now() - ban_time) > datetime.timedelta(minutes = (unban_time)**bans)):
                     # Unban
                     unban_ip(ip_addr)
-                    DB_LIST.pop(ip_addr,None)
+                    DB_LIST[ip_addr][2] = "U"
+                    DB_LIST[ip_addr][1] = ''
+                    DB_LIST[ip_addr][0] = 0
                     changed = True
             elif DB_LIST[ip_addr][2] == "U":
                 # Check if ban is needed
                 if (max_attempts >=0) and DB_LIST[ip_addr][0] >= max_attempts:
                     #Ban
                     ban_ip(ip_addr)
+                    DB_LIST[ip_addr][3] += 1
                     DB_LIST[ip_addr][2] = "B"
                     DB_LIST[ip_addr][1] = str(datetime.datetime.now())
+                    DB_LIST[ip_addr][0] = 0
                     changed = True
+
+        ip_addresses = [i for i in DB_LIST.keys()]
+        for ip_addr in ip_addresses:
+            if (DB_LIST[ip_addr][2] == "B") and not(check_ip(ip_addr)):
+                print("Rebanning ip address: {}".format(ip_addr))
+                ban_ip(ip_addr)
+
         if changed == True:
             write_db(DB_FILENAME, DB_LIST)
         try:
@@ -165,6 +194,7 @@ def thread_process(comm):
                 DB_LIST[item["IP_ADDR"]].append(item["COUNT"])
                 DB_LIST[item["IP_ADDR"]].append('')
                 DB_LIST[item["IP_ADDR"]].append("U")
+                DB_LIST[item["IP_ADDR"]].append(0)
                 changed = True
         elif item["OPERATION"] == "S":
             DB_LIST.pop(item["IP_ADDR"], None)
@@ -174,16 +204,9 @@ def thread_process(comm):
 
 def check_iptables_rights():
     print("Checking administrative rights...")
-    f = subprocess.Popen(['iptables', '-L'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    output = f.stderr.readline()
-    f.terminate()
-    if output != b'':
-        if (re.search('Permission denied', output.decode()) != None):
-            return [1,output]
-        else:
-            return [2,output]
-    return [0,'']
-
+    f = subprocess.run(['iptables', '-L', '-w'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output = f.returncode
+    return output
 
 def main():
     global fd
@@ -208,7 +231,8 @@ def main():
     parser.add_argument('-f', '--file' , help='the SSH auth.log file. Defaults to /var/log/auth.log', default='/var/log/auth.log', type=str)
     parser.add_argument('-d', '--database' , help='the JSON database filename. Defaults to ./database', default='./database', type=str)
     parser.add_argument('-m', '--max_attempts' , help='maximum number of SSH login attempts before the ban. -1 for no ban. Default is 3', default=3, type=int)
-    parser.add_argument('-u', '--unban_limit' , help='Unbanning time in minutes. -1 for indefinite. Default is -1', default=-1, type=int)
+    parser.add_argument('-u', '--unban_limit' , help='''Unbanning time in minutes. -1 for indefinite. Default is -1.
+            Ban occurs for unban_limit^(number of bans). This means that ban time increases exponentially in max_attempt increments until a successful login is detected''', default=-1, type=int)
 
     args = parser.parse_args()
     FILENAME = args.file
@@ -238,15 +262,13 @@ def main():
     filename = FILENAME
     db_filename = DB_FILENAME
     
-    error, output = check_iptables_rights()
-    if error == 1:
+    output = check_iptables_rights()
+    
+    if output == 0:
+        print("OK")
+    else:
         print("Error, need administrative rights.")
         return 0
-    elif error == 2:
-        print("Error, unknown: ", output)
-        return 0
-    else:
-        print("OK")
     print("")
 
     DB_LIST = read_db(db_filename)
