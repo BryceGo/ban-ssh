@@ -1,6 +1,8 @@
 # BAN-SSH: Automatic SSH Ban
 [![license](https://img.shields.io/github/license/mashape/apistatus.svg?maxAge=2592000)](./LICENSE)
 
+![alt text](img/demo.gif)
+
 # Description
 Ban-SSH is an SSH monitoring python script that automatically bans IP addresses based on the number of attempts performed.
 The program monitors the SSH auth log file usually located in /var/log/auth.log. The script will track the number of failed attempts associated with the IP address to the SSH server. If an IP addresses reaches the maximum number of attemtps, the script will "ban" the IP address by creating a netfilter rule against the IP address.
